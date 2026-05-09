@@ -6,12 +6,12 @@ import {
   Unlock,
   Eye,
   EyeOff,
-  Sparkles,
-  Heart,
-  ArrowDown,
-  ChevronRight,
+  Stethoscope,
+  User,
+  ArrowLeft,
   ClipboardList,
   Trash2,
+  Copy,
 } from "lucide-react";
 import "./styles.css";
 import { encryptJson, decryptJson } from "./crypto";
@@ -20,6 +20,7 @@ import {
   grantAccessDemo,
   revokeAccessDemo,
   hasAccessDemo,
+  consumeOpenDemo,
 } from "./permissionsDemo";
 import {
   appendAuditEvent,
@@ -27,6 +28,7 @@ import {
   readAuditLog,
   type AuditEvent,
 } from "./auditLog";
+import { encodeConsultShareCode, decodeConsultShareCode } from "./shareCode";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
@@ -47,18 +49,17 @@ type StoredRecord = {
   };
 };
 
-function scrollToId(id: string) {
-  document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
-}
+type AppMode = "pick" | "patient" | "doctor";
 
 function App() {
+  const [mode, setMode] = React.useState<AppMode>("pick");
   const [wallet, setWallet] = React.useState("");
   const [doctorWallet, setDoctorWallet] = React.useState("");
   const [recordId, setRecordId] = React.useState("");
   const [secret, setSecret] = React.useState("demo-secret-123");
-  const [minutes, setMinutes] = React.useState(5);
+  const [maxOpens, setMaxOpens] = React.useState(5);
   const [status, setStatus] = React.useState(
-    "Ready — connect Phantom to anchor your decentralized identity for this demo.",
+    "Elige si entras como paciente o como médico.",
   );
   const [doctorView, setDoctorView] = React.useState<FertilityRecord | null>(
     null,
@@ -66,22 +67,33 @@ function App() {
   const [auditTrail, setAuditTrail] = React.useState<AuditEvent[]>(() =>
     readAuditLog(),
   );
+  /** Generado al otorgar permiso: un solo código para el médico */
+  const [shareCode, setShareCode] = React.useState("");
+  /** Solo vista médico: código pegado por el médico */
+  const [consultCode, setConsultCode] = React.useState("");
   const [form, setForm] = React.useState<FertilityRecord>({
     lastCycleDate: "2026-05-03",
-    ovulationWindow: "May 15–20",
-    symptoms: "mild cramps, headache",
-    notes: "Private fertility note for demo only",
+    ovulationWindow: "15–20 may",
+    symptoms: "leves molestias",
+    notes: "Nota privada de demo",
   });
 
   function syncAudit() {
     setAuditTrail(readAuditLog());
   }
 
+  function goPick() {
+    setMode("pick");
+    setDoctorView(null);
+    setConsultCode("");
+    setStatus("Elige tu rol para continuar.");
+  }
+
   async function connectWallet() {
     try {
       const address = await connectPhantom();
       setWallet(address);
-      setStatus(`Signed in as ${short(address)}`);
+      setStatus(`Conectado: ${short(address)}`);
     } catch (err) {
       setStatus(`Error: ${(err as Error).message}`);
     }
@@ -90,7 +102,11 @@ function App() {
   async function saveRecord() {
     try {
       const currentWallet = wallet || (await getWalletAddress());
-      if (!currentWallet) throw new Error("Please connect your wallet first.");
+      if (!currentWallet) {
+        throw new Error(
+          "Conecta Phantom con tu wallet para guardar: los datos se asocian a tu identidad.",
+        );
+      }
 
       const encryptedPayload = await encryptJson(form, secret);
 
@@ -100,10 +116,11 @@ function App() {
         body: JSON.stringify({ ownerWallet: currentWallet, encryptedPayload }),
       });
 
-      if (!response.ok)
+      if (!response.ok) {
         throw new Error(
-          "Could not save your entry. Is the server running?",
+          "No se pudo guardar. ¿Está el backend en http://localhost:4000?",
         );
+      }
 
       const saved: StoredRecord = await response.json();
       setRecordId(saved.id);
@@ -111,13 +128,14 @@ function App() {
         type: "record_sealed",
         recordId: saved.id,
         summary:
-          "Encrypted fertility data saved off-chain — never uploaded as plaintext.",
+          "Registro cifrado guardado fuera de cadena (el servidor no ve texto claro).",
         actorRole: "patient",
         walletShort: short(currentWallet),
       });
       syncAudit();
+      setShareCode("");
       setStatus(
-        `Saved securely. Your record code is ${saved.id} — grant timed consent in step 2 when you're ready.`,
+        `Guardado. Cuando otorgues permiso al médico, se generará un único código de consulta para pasárselo.`,
       );
     } catch (err) {
       setStatus(`Error: ${(err as Error).message}`);
@@ -127,32 +145,41 @@ function App() {
   async function grantAccess() {
     try {
       const rid = recordId.trim();
-      if (!rid) throw new Error("Save your health entry in step 1 first.");
-      if (!doctorWallet.trim())
-        throw new Error("Add the care provider's ID from step 2.");
+      if (!rid) throw new Error("Primero guarda un registro cifrado.");
+      if (!doctorWallet.trim()) {
+        throw new Error("Indica la wallet del médico al que concedes acceso.");
+      }
+      const n = Math.max(1, Math.floor(maxOpens));
       const currentWallet = wallet || (await getWalletAddress());
-      if (!currentWallet) throw new Error("Please connect as the patient first.");
-
-      const expiresAt = Math.floor(Date.now() / 1000) + minutes * 60;
+      if (!currentWallet) {
+        throw new Error("Conecta tu wallet de paciente para dar permiso.");
+      }
 
       grantAccessDemo({
         patient: currentWallet,
         doctor: doctorWallet.trim(),
         recordId: rid,
-        expiresAt,
+        maxOpens: n,
+        opensUsed: 0,
       });
+
+      const consultPayload = encodeConsultShareCode({
+        v: 1,
+        recordId: rid,
+        secret,
+      });
+      setShareCode(consultPayload);
 
       appendAuditEvent({
         type: "consent_granted",
         recordId: rid,
-        summary: `Timed consent for clinician ${short(doctorWallet.trim())} (${minutes} min). MVP: stored locally; Solana will prove consent on-chain.`,
+        summary: `Consentimiento: wallet ${short(doctorWallet.trim())}, hasta ${n} apertura(s). Código único de consulta generado para el médico.`,
         actorRole: "patient",
         walletShort: short(currentWallet),
       });
       syncAudit();
-
       setStatus(
-        `Consent granted for ${minutes} minute(s) — clinician can request access in step 3. Check the audit trail below.`,
+        `Permiso otorgado. Copia el código de consulta de abajo y pásalo al médico por un canal seguro (máx. ${n} apertura(s)).`,
       );
     } catch (err) {
       setStatus(`Error: ${(err as Error).message}`);
@@ -162,10 +189,13 @@ function App() {
   async function revokeAccess() {
     try {
       const rid = recordId.trim();
-      if (!rid || !doctorWallet.trim())
-        throw new Error("You need a record code and the care provider's ID.");
+      if (!rid || !doctorWallet.trim()) {
+        throw new Error("Hace falta el código de registro y la wallet del médico.");
+      }
       const currentWallet = wallet || (await getWalletAddress());
-      if (!currentWallet) throw new Error("Please connect as the patient first.");
+      if (!currentWallet) {
+        throw new Error("Conecta tu wallet de paciente para revocar.");
+      }
 
       revokeAccessDemo({
         patient: currentWallet,
@@ -175,16 +205,13 @@ function App() {
       appendAuditEvent({
         type: "consent_revoked",
         recordId: rid,
-        summary:
-          "Patient revoked clinician access — further views should be denied until new consent.",
+        summary: "La paciente revocó el acceso del médico a este registro.",
         actorRole: "patient",
         walletShort: short(currentWallet),
       });
       syncAudit();
-      setDoctorView(null);
-      setStatus(
-        "Consent revoked — audit trail updated. Clinician access is blocked for this record.",
-      );
+      setShareCode("");
+      setStatus("Acceso revocado. El médico ya no debería poder abrir (salvo copias ajenas al sistema).");
     } catch (err) {
       setStatus(`Error: ${(err as Error).message}`);
     }
@@ -192,11 +219,17 @@ function App() {
 
   async function doctorReadRecord() {
     try {
-      const rid = recordId.trim();
-      if (!rid) throw new Error("Enter the record code the patient shared.");
+      const parsed = decodeConsultShareCode(consultCode);
+      if (!parsed) {
+        throw new Error(
+          "Código inválido. Pega el código completo que te envió la paciente al otorgar permiso.",
+        );
+      }
+      const { recordId: rid, secret: decryptSecret } = parsed;
       const currentDoctorWallet = wallet || (await getWalletAddress());
-      if (!currentDoctorWallet)
-        throw new Error("Please connect as the care provider.");
+      if (!currentDoctorWallet) {
+        throw new Error("Conecta la wallet con la que te dieron permiso (Phantom).");
+      }
 
       const permission = hasAccessDemo({
         doctor: currentDoctorWallet,
@@ -209,7 +242,7 @@ function App() {
         appendAuditEvent({
           type: "view_denied",
           recordId: rid,
-          summary: `View denied: ${auditDenialReason(reason)}.`,
+          summary: `Acceso denegado: ${denialText(reason)}.`,
           actorRole: "doctor",
           walletShort: short(currentDoctorWallet),
         });
@@ -223,31 +256,32 @@ function App() {
         appendAuditEvent({
           type: "view_denied",
           recordId: rid,
-          summary: "View denied: record not found on server.",
+          summary: "Registro no encontrado en el servidor.",
           actorRole: "doctor",
           walletShort: short(currentDoctorWallet),
         });
         syncAudit();
-        throw new Error("That record code was not found.");
+        throw new Error("El registro ya no está en el servidor o el código es antiguo.");
       }
 
       const record: StoredRecord = await response.json();
       const decrypted = await decryptJson<FertilityRecord>(
         record.encryptedPayload,
-        secret,
+        decryptSecret,
       );
       setDoctorView(decrypted);
+      consumeOpenDemo({ doctor: currentDoctorWallet, recordId: rid });
       appendAuditEvent({
         type: "view_succeeded",
         recordId: rid,
         summary:
-          "Clinician decrypted data locally after valid consent — ciphertext never exposed on-chain.",
+          "Consulta descifrada en local; se consumió 1 apertura del cupo acordado.",
         actorRole: "doctor",
         walletShort: short(currentDoctorWallet),
       });
       syncAudit();
       setStatus(
-        "Consent valid — data decrypted on this device only. Logged in audit trail.",
+        "Consulta mostrada. Queda un intento menos en el permiso (si aplica).",
       );
     } catch (err) {
       setStatus(`Error: ${(err as Error).message}`);
@@ -258,504 +292,359 @@ function App() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  async function copyRecordCode() {
-    const code = recordId.trim();
-    if (!code) return;
-    try {
-      await navigator.clipboard.writeText(code);
-      setStatus(
-        "Record code copied — you can paste it for the care provider if needed.",
-      );
-    } catch {
-      setStatus("Could not copy — select the code and copy manually.");
-    }
-  }
-
   return (
-    <div className="shell">
-      <div className="scroll-progress" aria-hidden="true">
-        <div className="scroll-progress__fill" />
+    <main className="page">
+      <div className="top-bar">
+        <div className="brand">
+          <Shield size={20} />
+          <span>Vitaseed</span>
+        </div>
+        {mode !== "pick" && (
+          <div className="top-bar__meta">
+            <span className="role-pill">
+              {mode === "patient" ? (
+                <>
+                  <User size={16} /> Modo paciente
+                </>
+              ) : (
+                <>
+                  <Stethoscope size={16} /> Modo médico (demo)
+                </>
+              )}
+            </span>
+            <button type="button" className="btn-ghost" onClick={goPick}>
+              <ArrowLeft size={16} /> Cambiar rol
+            </button>
+          </div>
+        )}
       </div>
 
-      <header className="site-nav">
-        <div className="site-nav__brand">
-          <span className="site-nav__brand-mark" aria-hidden>
-            <Heart size={18} fill="currentColor" strokeWidth={0} />
-          </span>
-          FemVault
-        </div>
-        <nav className="site-nav__links" aria-label="Primary">
-          <button type="button" onClick={() => scrollToId("story")}>
-            Why FemVault
-          </button>
-          <button type="button" onClick={() => scrollToId("how")}>
-            How it works
-          </button>
-          <button type="button" onClick={() => scrollToId("demo")}>
-            Try the demo
-          </button>
-          <button type="button" onClick={() => scrollToId("audit")}>
-            Audit trail
-          </button>
-          <button
-            type="button"
-            className="nav-cta"
-            onClick={() => {
-              void connectWallet();
-              scrollToId("demo");
-            }}
-          >
-            Connect Phantom
-          </button>
-        </nav>
-      </header>
-
-      <section className="landing-hero" aria-labelledby="hero-title">
-        <div className="landing-hero__content scroll-hero-text">
-          <div className="landing-hero__tag">
-            <Sparkles size={14} /> Own your data · Solana-ready
+      {mode === "pick" && (
+        <section className="hero">
+          <div className="badge">
+            <Shield size={16} /> MVP — Privacidad y consentimiento
           </div>
-          <h1 id="hero-title">
-            Fertility data that stays <em>yours</em>
-          </h1>
-          <p className="landing-hero__lead">
-            Typical fertility apps hoard intimate signals and monetize them —
-            you rarely get real control. FemVault turns that around: you decide
-            who sees what, you grant doctors{" "}
-            <strong>timed consent</strong>, and every access leaves a trail.
-            Medical notes stay encrypted off-chain; Solana is for{" "}
-            <strong>verifiable consent</strong>, audit history, and wallet
-            identity — never raw medical records on-chain.
+          <h1>Vitaseed</h1>
+          <p>
+            Tus datos de fertilidad cifrados; tú concedes cuántas veces puede
+            abrir el médico. La cadena (próximamente) prueba el consentimiento,
+            no almacena tu historia clínica.
           </p>
-          <div className="landing-hero__actions">
+          <div className="role-picker">
             <button
               type="button"
-              className="btn-primary"
+              className="role-card"
               onClick={() => {
-                void connectWallet();
-                scrollToId("demo");
+                setMode("patient");
+                setDoctorView(null);
+                setStatus(
+                  "Modo paciente: conecta Phantom y guarda tu registro cifrado.",
+                );
               }}
             >
-              Connect &amp; try it <ChevronRight size={18} />
+              <User size={28} aria-hidden />
+              <strong>Paciente</strong>
             </button>
             <button
               type="button"
-              className="btn-ghost"
-              onClick={() => scrollToId("how")}
+              className="role-card"
+              onClick={() => {
+                setMode("doctor");
+                setDoctorView(null);
+                setStatus(
+                  "Modo médico: conecta la wallet con la que te dieron acceso. MVP: no verificamos colegiación; cualquier wallet puede probar el flujo.",
+                );
+              }}
             >
-              See how it works
+              <Stethoscope size={28} aria-hidden />
+              <strong>Médico</strong>
             </button>
           </div>
-          <p className="landing-hero__hint">
-            {wallet ? (
-              <>
-                <strong>Signed in:</strong>{" "}
-                <span title={wallet}>{short(wallet)}</span> — scroll down to
-                run the guided demo.
-              </>
-            ) : (
-              <>
-                <strong>No wallet yet?</strong> Install Phantom, then tap
-                connect — the flow below takes under two minutes.
-              </>
-            )}
+        </section>
+      )}
+
+      {mode === "patient" && (
+        <section className="workspace">
+          <p className="hint strong">
+            Conecta <strong>Phantom</strong> con la wallet con la que quieres
+            asociar tus datos. Sin wallet no se puede guardar el registro.
           </p>
-          <div className="scroll-cue" aria-hidden>
-            <ArrowDown size={18} />
-            Scroll
-          </div>
-        </div>
+          <button type="button" onClick={() => void connectWallet()}>
+            Conectar Phantom
+          </button>
+          <p className="muted">
+            {wallet
+              ? `Wallet: ${short(wallet)}`
+              : "Aún no conectada — pulsa arriba cuando estés lista."}
+          </p>
 
-        <div className="landing-hero__visual scroll-hero-visual">
-          <div className="hero-blob hero-blob--1" aria-hidden />
-          <div className="hero-blob hero-blob--2" aria-hidden />
-          <div className="hero-card">
-            <p className="hero-card__title">What goes where</p>
-            <div className="hero-card__rows">
-              <div className="hero-card__row">
-                <span>Medical notes</span>
-                <span>Encrypted off-chain</span>
-              </div>
-              <div className="hero-card__row">
-                <span>Solana (next)</span>
-                <span>Consent · audit · DID</span>
-              </div>
-              <div className="hero-card__row">
-                <span>Doctor access</span>
-                <span>Your timed permission</span>
-              </div>
-            </div>
-            <div className="hero-card__spark">
-              <Shield size={14} /> MVP frontend — same flows wire to Anchor when
-              you deploy.
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="story" className="section-story">
-        <div className="section-story__inner reveal-scroll">
-            <h2>Ownership, not surveillance</h2>
-            <p>
-              Many fertility products collect deeply personal data with opaque
-              policies — especially concerning where reproductive rights are
-              under pressure. FemVault is built on a different contract:{" "}
-              <strong>you own your narrative</strong>, you choose who gets a
-              window into it, and <strong>every access attempt is logged</strong>
-              . Blockchain is the trust layer for consent and audit — not a
-              database for intimate medical detail.
-            </p>
-            <div className="story-stats">
-              <div className="story-stat">
-                <div className="story-stat__num">You</div>
-                <div className="story-stat__label">
-                  Hold the keys to encrypted data; revoke clinician access anytime
-                </div>
-              </div>
-              <div className="story-stat">
-                <div className="story-stat__num">Time-box</div>
-                <div className="story-stat__label">
-                  Grant doctors temporary consent — not open-ended surveillance
-                </div>
-              </div>
-              <div className="story-stat">
-                <div className="story-stat__num">Audit</div>
-                <div className="story-stat__label">
-                  See who tried to view data (MVP local → Solana-backed later)
-                </div>
-              </div>
-            </div>
-          </div>
-      </section>
-
-      <section id="how" className="section-how">
-          <div className="section-how__head reveal-scroll">
-            <h2>How the MVP works</h2>
-            <p>
-              Three steps mirror the real product promise — plus an audit trail
-              so “who accessed what” is never a black box.
-            </p>
-          </div>
-          <div className="how-grid">
-            <article className="how-card how-card--scroll">
-              <div className="how-card__step">1</div>
-              <h3>Seal your health entry</h3>
-              <p>
-                Add cycle data and notes. Everything is encrypted in your
-                browser before any server sees it —{" "}
-                <strong>no plaintext fertility data stored</strong> by design.
-              </p>
-            </article>
-            <article className="how-card how-card--scroll">
-              <div className="how-card__step">2</div>
-              <h3>Grant timed consent</h3>
-              <p>
-                Paste your clinician&apos;s wallet and how long they may view
-                this record. That&apos;s <strong>delegated access</strong>, not
-                ownership transfer — Solana will eventually anchor this consent.
-              </p>
-            </article>
-            <article className="how-card how-card--scroll">
-              <div className="how-card__step">3</div>
-              <h3>Access under audit</h3>
-              <p>
-                The clinician only decrypts after consent checks pass. Allow and
-                deny events appear in the <strong>audit trail</strong> — the same
-                signal you&apos;ll mirror on-chain for tamper-evident history.
-              </p>
-            </article>
-          </div>
-      </section>
-
-      <section id="demo" className="section-demo">
-          <div className="section-demo__intro reveal-scroll">
-            <h2>Interactive workspace</h2>
-            <p>
-              Walk through ownership end-to-end: seal data, grant or revoke
-              clinician consent, then verify access — every step logs to the{" "}
-              <strong>audit trail</strong> below (browser-only for this MVP).
-            </p>
-          </div>
-
-          <div className="demo-grid">
-            <div className="card demo-card-scroll">
+          <div className="grid-2">
+            <div className="card">
               <h2>
-                <Lock size={20} strokeWidth={2.25} /> 1. You — seal your data
+                <Lock size={20} /> Tu registro cifrado
               </h2>
-              <p className="helper" style={{ marginTop: 12 }}>
-                You stay the owner: notes are encrypted here before upload. The
-                server only ever sees ciphertext.
-              </p>
-              <label>Last period start date</label>
+              <label>Fecha último ciclo</label>
               <input
                 value={form.lastCycleDate}
                 onChange={(e) => updateField("lastCycleDate", e.target.value)}
               />
-              <label>Fertile window (your estimate)</label>
+              <label>Ventana fértil (tu estimación)</label>
               <input
                 value={form.ovulationWindow}
-                onChange={(e) => updateField("ovulationWindow", e.target.value)}
+                onChange={(e) =>
+                  updateField("ovulationWindow", e.target.value)
+                }
               />
-              <label>Symptoms</label>
+              <label>Síntomas</label>
               <input
                 value={form.symptoms}
                 onChange={(e) => updateField("symptoms", e.target.value)}
               />
-              <label>Private notes</label>
+              <label>Notas privadas</label>
               <textarea
                 value={form.notes}
                 onChange={(e) => updateField("notes", e.target.value)}
               />
-              <label>Shared passphrase (demo only)</label>
-              <p className="helper">
-                For this prototype, you and your care provider type the same
-                phrase to unlock the data. A real product would handle this
-                automatically.
+              <label>Clave de cifrado (solo tu equipo)</label>
+              <input
+                value={secret}
+                onChange={(e) => setSecret(e.target.value)}
+              />
+              <p className="hint">
+                Se usa para cifrar al guardar. Al otorgar permiso se empaqueta
+                automáticamente en el <strong>código único</strong> que recibirá
+                el médico — no hace falta dictarla aparte.
               </p>
-              <input value={secret} onChange={(e) => setSecret(e.target.value)} />
               <button type="button" onClick={() => void saveRecord()}>
-                Save my encrypted entry
+                Guardar registro cifrado
               </button>
-              <label style={{ marginTop: 18 }}>Your record code</label>
-              <p className="helper">
-                Short code for this saved entry — use it in step 3 if the care
-                provider opens the app on another device.
+              <p className="muted">
+                Registro interno: <strong>{recordId || "— guarda primero —"}</strong>
               </p>
-              <div className="record-row">
-                <span className="pill" title={recordId || undefined}>
-                  {recordId || "— save first —"}
-                </span>
-                {recordId ? (
-                  <button
-                    type="button"
-                    className="btn-inline"
-                    onClick={() => void copyRecordCode()}
-                  >
-                    Copy code
-                  </button>
-                ) : null}
-              </div>
             </div>
 
-            <div className="card demo-card-scroll">
+            <div className="card">
               <h2>
-                <Unlock size={20} strokeWidth={2.25} /> 2. You — timed consent
+                <Unlock size={20} /> Permiso al médico
               </h2>
-              <p className="helper" style={{ marginTop: 12 }}>
-                Decide <strong>who</strong> may read this record and{" "}
-                <strong>for how long</strong>. Revoke anytime — consent is yours,
-                not the app&apos;s.
-              </p>
-              <label>Clinician&apos;s wallet (decentralized ID)</label>
-              <p className="helper">
-                Phantom → copy address → paste here. Used only to enforce
-                permission — <strong>no medical payload</strong> goes to
-                Solana in this MVP (Anchor will store consent proofs later).
-              </p>
+              <label>Wallet del médico (a quién mostrar datos)</label>
               <input
                 value={doctorWallet}
                 onChange={(e) => setDoctorWallet(e.target.value.trim())}
-                placeholder="Paste the long code from Phantom"
+                placeholder="Pega la dirección Phantom del médico"
                 autoComplete="off"
                 spellCheck={false}
               />
-              {doctorWallet.length > 12 ? (
-                <div className="address-preview" title={doctorWallet}>
-                  Sharing with: <strong>{short(doctorWallet)}</strong>
-                </div>
-              ) : null}
-              <label>How long should access last?</label>
+              <label>Cuántas veces puede abrir el registro</label>
               <input
                 type="number"
                 min={1}
-                value={minutes}
-                onChange={(e) => setMinutes(Number(e.target.value))}
+                value={maxOpens}
+                onChange={(e) =>
+                  setMaxOpens(Math.max(1, Number(e.target.value) || 1))
+                }
               />
-              <p className="helper">Minutes until access expires automatically.</p>
+              <p className="hint">
+                Cada vez que el médico descifra con éxito se cuenta como una
+                consulta. Fallos por permiso o contraseña no consumen intentos.
+              </p>
               <button type="button" onClick={() => void grantAccess()}>
-                Allow access
+                Otorgar permiso
               </button>
               <button
                 type="button"
                 className="danger"
                 onClick={() => void revokeAccess()}
               >
-                Remove access
+                Revocar permiso
               </button>
-              <p className="hint">
-                <strong>Demo tip:</strong> use two Phantom accounts — one as
-                patient, one as care provider — or two browsers, so you can test
-                the full flow yourself.
-              </p>
-            </div>
 
-            <div className="card doctor demo-card-scroll">
-              <h2>
-                <Eye size={20} strokeWidth={2.25} /> 3. Clinician — view if
-                consented
-              </h2>
-              <p className="helper" style={{ marginTop: 12 }}>
-                Switch Phantom to the clinician identity. Decryption only runs if
-                consent is valid — denied attempts are{" "}
-                <strong>audited</strong> like allowed ones.
-              </p>
-              <label>Record code</label>
-              <p className="helper">
-                Usually filled in automatically after step 1; edit only if
-                you&apos;re on another device.
-              </p>
-              <input
-                value={recordId}
-                onChange={(e) => setRecordId(e.target.value)}
-                placeholder="e.g. KbYzFJA7UU"
-              />
-              <button type="button" onClick={() => void doctorReadRecord()}>
-                View patient entry
-              </button>
-              {doctorView ? (
-                <div className="result">
-                  <p>
-                    <b>Last period:</b> {doctorView.lastCycleDate}
+              {shareCode ? (
+                <div className="share-code-box">
+                  <label>Código único para el médico</label>
+                  <p className="hint">
+                    Incluye permiso + datos para descifrar este registro. Pásalo
+                    por un canal seguro; quien lo tenga puede abrir mientras haya
+                    cupos y consentimiento activo.
                   </p>
-                  <p>
-                    <b>Fertile window:</b> {doctorView.ovulationWindow}
-                  </p>
-                  <p>
-                    <b>Symptoms:</b> {doctorView.symptoms}
-                  </p>
-                  <p>
-                    <b>Notes:</b> {doctorView.notes}
-                  </p>
+                  <textarea
+                    className="share-code-text"
+                    readOnly
+                    rows={4}
+                    value={shareCode}
+                  />
+                  <button
+                    type="button"
+                    className="btn-inline"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(shareCode);
+                        setStatus("Código copiado al portapapeles.");
+                      } catch {
+                        setStatus(
+                          "No se pudo copiar automáticamente; selecciona el texto manualmente.",
+                        );
+                      }
+                    }}
+                  >
+                    <Copy size={16} aria-hidden /> Copiar código
+                  </button>
                 </div>
               ) : (
-                <div className="blocked">
-                  <EyeOff size={18} /> Nothing to show yet — the patient must
-                  allow access in step 2, and your passphrase must match theirs.
-                </div>
+                <p className="hint" style={{ marginTop: 16 }}>
+                  Tras <strong>Otorgar permiso</strong> aparecerá aquí el código
+                  que debes enviar al médico.
+                </p>
               )}
             </div>
           </div>
+        </section>
+      )}
 
-          <div className="status-bar reveal-scroll reveal-scroll--footer">
-            <b>Status:</b> {status}
+      {mode === "doctor" && (
+        <section className="workspace">
+          <div className="banner-demo">
+            <strong>Demo MVP:</strong> no verificamos licencia médica. Cualquier
+            wallet puede probar el rol médico; en producción solo la wallet que
+            la paciente autorice podrá abrir.
           </div>
+          <button type="button" onClick={() => void connectWallet()}>
+            Conectar Phantom (wallet del médico)
+          </button>
+          <p className="muted">
+            {wallet
+              ? `Wallet médico: ${short(wallet)}`
+              : "Conecta la cuenta con la que la paciente concedió permiso."}
+          </p>
 
-          <div id="audit" className="audit-panel reveal-scroll">
-            <div className="audit-panel__header">
-              <div>
-                <h2 className="audit-panel__title">
-                  <ClipboardList size={22} strokeWidth={2} aria-hidden />
-                  Access audit trail
-                </h2>
-                <p className="audit-panel__lede">
-                  Every save, consent change, successful view, and denied view
-                  is recorded — that&apos;s the accountability layer your context
-                  calls for. This MVP keeps the log in-browser; shipping Solana
-                  makes it <strong>tamper-evident</strong> and globally
-                  verifiable.
+          <div className="card doctor-single">
+            <h2>
+              <Eye size={20} /> Consulta autorizada
+            </h2>
+            <label>Código de consulta (enviado por la paciente)</label>
+            <textarea
+              className="consult-code-input"
+              value={consultCode}
+              onChange={(e) => setConsultCode(e.target.value)}
+              placeholder="Pega aquí el código largo que te envió la paciente al otorgar permiso"
+              rows={4}
+              spellCheck={false}
+            />
+            <button type="button" onClick={() => void doctorReadRecord()}>
+              Ver consulta
+            </button>
+            {doctorView ? (
+              <div className="result">
+                <p>
+                  <b>Último ciclo:</b> {doctorView.lastCycleDate}
+                </p>
+                <p>
+                  <b>Ventana fértil:</b> {doctorView.ovulationWindow}
+                </p>
+                <p>
+                  <b>Síntomas:</b> {doctorView.symptoms}
+                </p>
+                <p>
+                  <b>Notas:</b> {doctorView.notes}
                 </p>
               </div>
-              <button
-                type="button"
-                className="audit-panel__clear"
-                onClick={() => {
-                  clearAuditLog();
-                  syncAudit();
-                  setStatus("Audit trail cleared for this demo session.");
-                }}
-              >
-                <Trash2 size={16} aria-hidden />
-                Clear demo log
-              </button>
-            </div>
-
-            {auditTrail.length === 0 ? (
-              <p className="audit-empty">
-                No events yet. Save an encrypted record and grant consent — each
-                action will appear here with a timestamp.
-              </p>
             ) : (
-              <ul className="audit-list">
-                {auditTrail.map((ev) => (
-                  <li key={ev.id} className="audit-item">
-                    <div className="audit-item__top">
-                      <time
-                        className="audit-item__time"
-                        dateTime={new Date(ev.ts).toISOString()}
-                      >
-                        {new Date(ev.ts).toLocaleString()}
-                      </time>
-                      <span
-                        className={`audit-badge audit-badge--${ev.type}`}
-                      >
-                        {formatAuditType(ev.type)}
-                      </span>
-                    </div>
-                    <p className="audit-item__meta">
-                      <span className="audit-item__role">{ev.actorRole}</span>
-                      {ev.walletShort ? (
-                        <>
-                          {" "}
-                          · <span title={ev.walletShort}>{ev.walletShort}</span>
-                        </>
-                      ) : null}{" "}
-                      · record <code className="audit-code">{ev.recordId}</code>
-                    </p>
-                    <p className="audit-item__summary">{ev.summary}</p>
-                  </li>
-                ))}
-              </ul>
+              <div className="blocked">
+                <EyeOff size={18} /> Sin datos — conecta tu wallet autorizada y
+                pega el código de consulta que te envió la paciente.
+              </div>
             )}
           </div>
-      </section>
+        </section>
+      )}
 
-      <footer className="site-footer">
-        <p>
-          <strong>FemVault</strong> — intimate fertility data encrypted
-          off-chain; <strong>Solana</strong> for verifiable consent, access
-          history, and decentralized identity —{" "}
-          <strong>not</strong> for storing medical records on-chain.
-        </p>
-      </footer>
-    </div>
+      {(mode === "patient" || mode === "doctor") && (
+        <section className="audit-section card">
+          <div className="audit-head">
+            <h2>
+              <ClipboardList size={20} /> Registro de auditoría (MVP)
+            </h2>
+            <button
+              type="button"
+              className="btn-inline"
+              onClick={() => {
+                clearAuditLog();
+                syncAudit();
+                setStatus("Historial de auditoría borrado (solo esta sesión demo).");
+              }}
+            >
+              <Trash2 size={14} /> Limpiar historial
+            </button>
+          </div>
+          <p className="hint">
+            Cada acción importante queda aquí (en el navegador). En producción
+            se puede replicar en Solana para que sea verificable.
+          </p>
+          {auditTrail.length === 0 ? (
+            <p className="muted">Aún no hay eventos.</p>
+          ) : (
+            <ul className="audit-list">
+              {auditTrail.map((ev) => (
+                <li key={ev.id} className="audit-item">
+                  <div className="audit-row">
+                    <span className="audit-type">{formatType(ev.type)}</span>
+                    <time dateTime={new Date(ev.ts).toISOString()}>
+                      {new Date(ev.ts).toLocaleString()}
+                    </time>
+                  </div>
+                  <p className="audit-meta">
+                    {ev.actorRole} · {ev.walletShort ?? "—"} · registro{" "}
+                    <code>{ev.recordId}</code>
+                  </p>
+                  <p>{ev.summary}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      <section className="status">
+        <b>Estado:</b> {status}
+      </section>
+    </main>
   );
 }
 
 function short(address: string) {
-  if (address.length <= 12) return address;
+  if (!address || address.length <= 12) return address || "—";
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
 }
 
-function auditDenialReason(reason: string): string {
+function denialText(reason: string): string {
   const map: Record<string, string> = {
-    "no permission found": "no active consent for this wallet / record",
-    "permission revoked": "patient revoked consent",
-    "permission expired": "consent window expired",
+    no_permission: "sin consentimiento para esta wallet y registro",
+    permission_revoked: "permiso revocado por la paciente",
+    attempts_exhausted: "se agotaron las aperturas permitidas",
   };
   return map[reason] ?? reason;
 }
 
-function formatAuditType(t: AuditEvent["type"]): string {
-  const labels: Record<AuditEvent["type"], string> = {
-    record_sealed: "Record sealed",
-    consent_granted: "Consent granted",
-    consent_revoked: "Consent revoked",
-    view_succeeded: "View allowed",
-    view_denied: "View denied",
-  };
-  return labels[t];
-}
-
 function friendlyDenial(reason: string): string {
   const map: Record<string, string> = {
-    "no permission found":
-      "Access not granted yet — ask the patient to allow access in step 2.",
-    "permission revoked":
-      "The patient removed access. They can allow it again if needed.",
-    "permission expired":
-      "This access window ended. Ask the patient to allow access again.",
+    no_permission:
+      "Sin permiso activo: la paciente debe otorgarte acceso con tu wallet y pasarte el código de consulta.",
+    permission_revoked: "La paciente revocó el acceso.",
+    attempts_exhausted:
+      "No quedan aperturas: la paciente debe otorgar un nuevo permiso.",
   };
-  return map[reason] ?? `Access not available (${reason}).`;
+  return map[reason] ?? `Acceso denegado (${reason}).`;
+}
+
+function formatType(t: AuditEvent["type"]): string {
+  const m: Record<AuditEvent["type"], string> = {
+    record_sealed: "Registro guardado",
+    consent_granted: "Consentimiento",
+    consent_revoked: "Revocación",
+    view_succeeded: "Consulta vista",
+    view_denied: "Acceso denegado",
+  };
+  return m[t];
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

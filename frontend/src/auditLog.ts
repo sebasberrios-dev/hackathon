@@ -1,8 +1,3 @@
-/**
- * MVP: append-only access trail in localStorage.
- * Production intent: emit the same events to Solana (Anchor) for tamper-evident audit + verifiable consent.
- */
-
 export type AuditEventType =
   | "record_sealed"
   | "consent_granted"
@@ -20,7 +15,7 @@ export type AuditEvent = {
   walletShort?: string;
 };
 
-const KEY = "femvault-demo-audit";
+const KEY = "vitaseed-demo-audit";
 const MAX = 120;
 
 function uid() {

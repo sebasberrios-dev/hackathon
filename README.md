@@ -1,4 +1,4 @@
-# FemVault MVP — Solana Privacy Wallet for Fertility Data
+# Vitaseed MVP — Solana Privacy Wallet for Fertility Data
 
 MVP para hackathon: una paciente guarda un dato de fertilidad cifrado, da acceso temporal a un doctor y luego lo revoca. Los datos médicos NO se guardan en Solana; Solana solo guarda permisos verificables.
 
@@ -73,4 +73,4 @@ Después copien el program id en `frontend/.env`.
 
 Frase clave:
 
-> FemVault no guarda datos médicos en blockchain. Solana se usa para consentimiento, permisos temporales y auditoría verificable.
+> Vitaseed no guarda datos médicos en blockchain. Solana se usa para consentimiento, permisos e auditoría verificable.

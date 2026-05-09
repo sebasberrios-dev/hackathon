@@ -24,7 +24,7 @@ async function writeDb(records) {
 }
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'femvault-backend' });
+  res.json({ ok: true, service: 'vitaseed-backend' });
 });
 
 app.post('/records', async (req, res) => {
@@ -60,5 +60,5 @@ app.get('/records/:id', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`FemVault backend running on http://localhost:${PORT}`);
+  console.log(`Vitaseed backend running on http://localhost:${PORT}`);
 });
