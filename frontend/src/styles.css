@@ -37,3 +37,219 @@ button.danger { background: #b4235a; }
   .grid { grid-template-columns: 1fr; }
   h1 { font-size: 42px; }
 }
+
+/* Rol paciente / médico */
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #eadff4;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  font-size: 1.25rem;
+  color: #5a2c82;
+}
+
+.top-bar__meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.role-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #efe3ff;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #5a2c82;
+}
+
+.role-picker {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18px;
+  margin-top: 24px;
+}
+
+@media (max-width: 720px) {
+  .role-picker { grid-template-columns: 1fr; }
+}
+
+.role-card {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px 24px;
+  border-radius: 24px;
+  border: 2px solid #eee7f7;
+  background: white;
+  cursor: pointer;
+  width: 100%;
+  margin-top: 0;
+  box-shadow: 0 14px 35px rgba(76, 45, 120, 0.06);
+  transition: border-color 0.2s, transform 0.2s;
+  color: #5a2c82;
+}
+
+.role-card:hover {
+  border-color: #c4b5fd;
+  transform: translateY(-2px);
+  filter: none;
+}
+
+.role-card strong {
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.workspace {
+  margin-top: 8px;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18px;
+  margin-top: 20px;
+}
+
+@media (max-width: 900px) {
+  .grid-2 { grid-template-columns: 1fr; }
+}
+
+.banner-demo {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  font-size: 0.92rem;
+  margin-bottom: 16px;
+  line-height: 1.45;
+}
+
+.doctor-single {
+  max-width: 640px;
+}
+
+.btn-ghost {
+  width: auto;
+  margin: 0;
+  padding: 10px 16px;
+  background: white;
+  color: #6f3cc3;
+  border: 2px solid #d9cfe7;
+}
+
+.btn-ghost:hover {
+  background: #faf8ff;
+  filter: none;
+}
+
+.btn-inline {
+  width: auto;
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  background: #f3e9ff;
+  color: #5a2c82;
+}
+
+.hint.strong {
+  font-weight: 600;
+  color: #374151;
+}
+
+.audit-section {
+  margin-top: 28px;
+}
+
+.audit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.audit-head h2 {
+  margin: 0;
+}
+
+.audit-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+}
+
+.audit-item {
+  padding: 12px 0;
+  border-bottom: 1px solid #eee7f7;
+  font-size: 0.92rem;
+}
+
+.audit-row {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.audit-type {
+  font-weight: 800;
+  color: #6f3cc3;
+}
+
+.audit-meta {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+  color: #6b7280;
+}
+
+.audit-item code {
+  font-size: 0.85em;
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.share-code-box {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid #eee7f7;
+}
+
+.share-code-text {
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  word-break: break-all;
+  margin-top: 8px;
+  resize: vertical;
+}
+
+.consult-code-input {
+  font-family: ui-monospace, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  word-break: break-all;
+  margin-top: 8px;
+}

@@ -1,5 +1,5 @@
 {
-  "name": "femvault-anchor",
+  "name": "vitaseed-anchor",
   "version": "1.0.0",
   "scripts": {
     "test": "anchor test"

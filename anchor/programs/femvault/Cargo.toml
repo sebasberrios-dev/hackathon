@@ -1,7 +1,7 @@
 [package]
 name = "femvault"
 version = "0.1.0"
-description = "FemVault Solana permission program"
+description = "Vitaseed Solana permission program"
 edition = "2021"
 
 [lib]
