@@ -10,6 +10,8 @@ import {
   Heart,
   ArrowDown,
   ChevronRight,
+  ClipboardList,
+  Trash2,
 } from "lucide-react";
 import "./styles.css";
 import { encryptJson, decryptJson } from "./crypto";
@@ -19,6 +21,12 @@ import {
   revokeAccessDemo,
   hasAccessDemo,
 } from "./permissionsDemo";
+import {
+  appendAuditEvent,
+  clearAuditLog,
+  readAuditLog,
+  type AuditEvent,
+} from "./auditLog";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
@@ -50,10 +58,13 @@ function App() {
   const [secret, setSecret] = React.useState("demo-secret-123");
   const [minutes, setMinutes] = React.useState(5);
   const [status, setStatus] = React.useState(
-    "Ready — connect your wallet to begin.",
+    "Ready — connect Phantom to anchor your decentralized identity for this demo.",
   );
   const [doctorView, setDoctorView] = React.useState<FertilityRecord | null>(
     null,
+  );
+  const [auditTrail, setAuditTrail] = React.useState<AuditEvent[]>(() =>
+    readAuditLog(),
   );
   const [form, setForm] = React.useState<FertilityRecord>({
     lastCycleDate: "2026-05-03",
@@ -61,6 +72,10 @@ function App() {
     symptoms: "mild cramps, headache",
     notes: "Private fertility note for demo only",
   });
+
+  function syncAudit() {
+    setAuditTrail(readAuditLog());
+  }
 
   async function connectWallet() {
     try {
@@ -92,8 +107,17 @@ function App() {
 
       const saved: StoredRecord = await response.json();
       setRecordId(saved.id);
+      appendAuditEvent({
+        type: "record_sealed",
+        recordId: saved.id,
+        summary:
+          "Encrypted fertility data saved off-chain — never uploaded as plaintext.",
+        actorRole: "patient",
+        walletShort: short(currentWallet),
+      });
+      syncAudit();
       setStatus(
-        `Saved securely. Your record code is ${saved.id} — share access in step 2 when you're ready.`,
+        `Saved securely. Your record code is ${saved.id} — grant timed consent in step 2 when you're ready.`,
       );
     } catch (err) {
       setStatus(`Error: ${(err as Error).message}`);
@@ -118,8 +142,17 @@ function App() {
         expiresAt,
       });
 
+      appendAuditEvent({
+        type: "consent_granted",
+        recordId: rid,
+        summary: `Timed consent for clinician ${short(doctorWallet.trim())} (${minutes} min). MVP: stored locally; Solana will prove consent on-chain.`,
+        actorRole: "patient",
+        walletShort: short(currentWallet),
+      });
+      syncAudit();
+
       setStatus(
-        `Access granted for ${minutes} minute(s) — your care provider can open the record in step 3.`,
+        `Consent granted for ${minutes} minute(s) — clinician can request access in step 3. Check the audit trail below.`,
       );
     } catch (err) {
       setStatus(`Error: ${(err as Error).message}`);
@@ -139,9 +172,18 @@ function App() {
         doctor: doctorWallet.trim(),
         recordId: rid,
       });
+      appendAuditEvent({
+        type: "consent_revoked",
+        recordId: rid,
+        summary:
+          "Patient revoked clinician access — further views should be denied until new consent.",
+        actorRole: "patient",
+        walletShort: short(currentWallet),
+      });
+      syncAudit();
       setDoctorView(null);
       setStatus(
-        "Access removed — the care provider can no longer open this record.",
+        "Consent revoked — audit trail updated. Clinician access is blocked for this record.",
       );
     } catch (err) {
       setStatus(`Error: ${(err as Error).message}`);
@@ -163,14 +205,31 @@ function App() {
 
       if (!permission.ok) {
         setDoctorView(null);
-        setStatus(
-          friendlyDenial((permission as { ok: false; reason: string }).reason),
-        );
+        const reason = (permission as { ok: false; reason: string }).reason;
+        appendAuditEvent({
+          type: "view_denied",
+          recordId: rid,
+          summary: `View denied: ${auditDenialReason(reason)}.`,
+          actorRole: "doctor",
+          walletShort: short(currentDoctorWallet),
+        });
+        syncAudit();
+        setStatus(friendlyDenial(reason));
         return;
       }
 
       const response = await fetch(`${API_URL}/records/${rid}`);
-      if (!response.ok) throw new Error("That record code was not found.");
+      if (!response.ok) {
+        appendAuditEvent({
+          type: "view_denied",
+          recordId: rid,
+          summary: "View denied: record not found on server.",
+          actorRole: "doctor",
+          walletShort: short(currentDoctorWallet),
+        });
+        syncAudit();
+        throw new Error("That record code was not found.");
+      }
 
       const record: StoredRecord = await response.json();
       const decrypted = await decryptJson<FertilityRecord>(
@@ -178,7 +237,18 @@ function App() {
         secret,
       );
       setDoctorView(decrypted);
-      setStatus("Access approved — information shown only on this device.");
+      appendAuditEvent({
+        type: "view_succeeded",
+        recordId: rid,
+        summary:
+          "Clinician decrypted data locally after valid consent — ciphertext never exposed on-chain.",
+        actorRole: "doctor",
+        walletShort: short(currentDoctorWallet),
+      });
+      syncAudit();
+      setStatus(
+        "Consent valid — data decrypted on this device only. Logged in audit trail.",
+      );
     } catch (err) {
       setStatus(`Error: ${(err as Error).message}`);
     }
@@ -224,6 +294,9 @@ function App() {
           <button type="button" onClick={() => scrollToId("demo")}>
             Try the demo
           </button>
+          <button type="button" onClick={() => scrollToId("audit")}>
+            Audit trail
+          </button>
           <button
             type="button"
             className="nav-cta"
@@ -240,14 +313,19 @@ function App() {
       <section className="landing-hero" aria-labelledby="hero-title">
         <div className="landing-hero__content scroll-hero-text">
           <div className="landing-hero__tag">
-            <Sparkles size={14} /> Solana privacy lab
+            <Sparkles size={14} /> Own your data · Solana-ready
           </div>
           <h1 id="hero-title">
-            Your cycle story, <em>fully yours</em>
+            Fertility data that stays <em>yours</em>
           </h1>
           <p className="landing-hero__lead">
-            FemVault encrypts sensitive fertility notes before they ever touch a
-            server. Share timed access with a care provider — revoke it anytime.
+            Typical fertility apps hoard intimate signals and monetize them —
+            you rarely get real control. FemVault turns that around: you decide
+            who sees what, you grant doctors{" "}
+            <strong>timed consent</strong>, and every access leaves a trail.
+            Medical notes stay encrypted off-chain; Solana is for{" "}
+            <strong>verifiable consent</strong>, audit history, and wallet
+            identity — never raw medical records on-chain.
           </p>
           <div className="landing-hero__actions">
             <button
@@ -292,24 +370,24 @@ function App() {
           <div className="hero-blob hero-blob--1" aria-hidden />
           <div className="hero-blob hero-blob--2" aria-hidden />
           <div className="hero-card">
-            <p className="hero-card__title">Privacy snapshot</p>
+            <p className="hero-card__title">What goes where</p>
             <div className="hero-card__rows">
               <div className="hero-card__row">
-                <span>Data on-chain</span>
-                <span>Consent only</span>
+                <span>Medical notes</span>
+                <span>Encrypted off-chain</span>
               </div>
               <div className="hero-card__row">
-                <span>Notes storage</span>
-                <span>AES-GCM + PBKDF2</span>
+                <span>Solana (next)</span>
+                <span>Consent · audit · DID</span>
               </div>
               <div className="hero-card__row">
-                <span>Access window</span>
-                <span>You decide</span>
+                <span>Doctor access</span>
+                <span>Your timed permission</span>
               </div>
             </div>
             <div className="hero-card__spark">
-              <Shield size={14} /> Built for hackathon demos — designed like a
-              2026 product.
+              <Shield size={14} /> MVP frontend — same flows wire to Anchor when
+              you deploy.
             </div>
           </div>
         </div>
@@ -317,30 +395,33 @@ function App() {
 
       <section id="story" className="section-story">
         <div className="section-story__inner reveal-scroll">
-            <h2>Designed for calm, not complexity</h2>
+            <h2>Ownership, not surveillance</h2>
             <p>
-              Health data shouldn&apos;t feel like a spreadsheet of wallet
-              strings. FemVault keeps the medical payload encrypted off-chain
-              while Solana can anchor who is allowed to read — and until when —
-              when you wire up the Anchor program.
+              Many fertility products collect deeply personal data with opaque
+              policies — especially concerning where reproductive rights are
+              under pressure. FemVault is built on a different contract:{" "}
+              <strong>you own your narrative</strong>, you choose who gets a
+              window into it, and <strong>every access attempt is logged</strong>
+              . Blockchain is the trust layer for consent and audit — not a
+              database for intimate medical detail.
             </p>
             <div className="story-stats">
               <div className="story-stat">
-                <div className="story-stat__num">0</div>
+                <div className="story-stat__num">You</div>
                 <div className="story-stat__label">
-                  Plaintext fertility notes stored by design
+                  Hold the keys to encrypted data; revoke clinician access anytime
                 </div>
               </div>
               <div className="story-stat">
-                <div className="story-stat__num">1-tap</div>
+                <div className="story-stat__num">Time-box</div>
                 <div className="story-stat__label">
-                  Flow to grant or revoke access in the demo
+                  Grant doctors temporary consent — not open-ended surveillance
                 </div>
               </div>
               <div className="story-stat">
-                <div className="story-stat__num">∞</div>
+                <div className="story-stat__num">Audit</div>
                 <div className="story-stat__label">
-                  Room to grow — UX first, chain as proof
+                  See who tried to view data (MVP local → Solana-backed later)
                 </div>
               </div>
             </div>
@@ -349,35 +430,38 @@ function App() {
 
       <section id="how" className="section-how">
           <div className="section-how__head reveal-scroll">
-            <h2>How the interactive demo works</h2>
+            <h2>How the MVP works</h2>
             <p>
-              Three gentle steps — save, share, verify — same screen, no tab
-              gymnastics.
+              Three steps mirror the real product promise — plus an audit trail
+              so “who accessed what” is never a black box.
             </p>
           </div>
           <div className="how-grid">
             <article className="how-card how-card--scroll">
               <div className="how-card__step">1</div>
-              <h3>Seal your entry</h3>
+              <h3>Seal your health entry</h3>
               <p>
-                Add cycle details and notes. Everything is encrypted in your
-                browser before upload.
+                Add cycle data and notes. Everything is encrypted in your
+                browser before any server sees it —{" "}
+                <strong>no plaintext fertility data stored</strong> by design.
               </p>
             </article>
             <article className="how-card how-card--scroll">
               <div className="how-card__step">2</div>
-              <h3>Invite your clinician</h3>
+              <h3>Grant timed consent</h3>
               <p>
-                Paste their wallet ID and choose how long access lasts. We show
-                a friendly short preview so long addresses feel manageable.
+                Paste your clinician&apos;s wallet and how long they may view
+                this record. That&apos;s <strong>delegated access</strong>, not
+                ownership transfer — Solana will eventually anchor this consent.
               </p>
             </article>
             <article className="how-card how-card--scroll">
               <div className="how-card__step">3</div>
-              <h3>They open when allowed</h3>
+              <h3>Access under audit</h3>
               <p>
-                Switch Phantom to the care provider, match the record code and
-                passphrase — see data only if permission is valid.
+                The clinician only decrypts after consent checks pass. Allow and
+                deny events appear in the <strong>audit trail</strong> — the same
+                signal you&apos;ll mirror on-chain for tamper-evident history.
               </p>
             </article>
           </div>
@@ -385,23 +469,22 @@ function App() {
 
       <section id="demo" className="section-demo">
           <div className="section-demo__intro reveal-scroll">
-            <h2>Try the live workspace</h2>
+            <h2>Interactive workspace</h2>
             <p>
-              The cards below are fully functional — save a record, share
-              access, then read as the clinician. Status updates appear at the
-              bottom.
+              Walk through ownership end-to-end: seal data, grant or revoke
+              clinician consent, then verify access — every step logs to the{" "}
+              <strong>audit trail</strong> below (browser-only for this MVP).
             </p>
           </div>
 
           <div className="demo-grid">
             <div className="card demo-card-scroll">
               <h2>
-                <Lock size={20} strokeWidth={2.25} /> 1. Patient — save your
-                entry
+                <Lock size={20} strokeWidth={2.25} /> 1. You — seal your data
               </h2>
               <p className="helper" style={{ marginTop: 12 }}>
-                Fill in your health details below. Nothing is stored in plain
-                text.
+                You stay the owner: notes are encrypted here before upload. The
+                server only ever sees ciphertext.
               </p>
               <label>Last period start date</label>
               <input
@@ -456,18 +539,18 @@ function App() {
 
             <div className="card demo-card-scroll">
               <h2>
-                <Unlock size={20} strokeWidth={2.25} /> 2. Patient — share
-                access
+                <Unlock size={20} strokeWidth={2.25} /> 2. You — timed consent
               </h2>
               <p className="helper" style={{ marginTop: 12 }}>
-                Choose who may read this entry and for how long. We show a short
-                ID so long wallet strings are easier to scan.
+                Decide <strong>who</strong> may read this record and{" "}
+                <strong>for how long</strong>. Revoke anytime — consent is yours,
+                not the app&apos;s.
               </p>
-              <label>Care provider&apos;s wallet ID</label>
+              <label>Clinician&apos;s wallet (decentralized ID)</label>
               <p className="helper">
-                In Phantom: open the menu → copy the address → paste here. We
-                use it only to match permission — no medical data is sent
-                on-chain in this demo.
+                Phantom → copy address → paste here. Used only to enforce
+                permission — <strong>no medical payload</strong> goes to
+                Solana in this MVP (Anchor will store consent proofs later).
               </p>
               <input
                 value={doctorWallet}
@@ -508,12 +591,13 @@ function App() {
 
             <div className="card doctor demo-card-scroll">
               <h2>
-                <Eye size={20} strokeWidth={2.25} /> 3. Care provider — open
-                when allowed
+                <Eye size={20} strokeWidth={2.25} /> 3. Clinician — view if
+                consented
               </h2>
               <p className="helper" style={{ marginTop: 12 }}>
-                Connect as the care provider, enter the record code the patient
-                shared, and use the same passphrase they used when saving.
+                Switch Phantom to the clinician identity. Decryption only runs if
+                consent is valid — denied attempts are{" "}
+                <strong>audited</strong> like allowed ones.
               </p>
               <label>Record code</label>
               <p className="helper">
@@ -555,12 +639,82 @@ function App() {
           <div className="status-bar reveal-scroll reveal-scroll--footer">
             <b>Status:</b> {status}
           </div>
+
+          <div id="audit" className="audit-panel reveal-scroll">
+            <div className="audit-panel__header">
+              <div>
+                <h2 className="audit-panel__title">
+                  <ClipboardList size={22} strokeWidth={2} aria-hidden />
+                  Access audit trail
+                </h2>
+                <p className="audit-panel__lede">
+                  Every save, consent change, successful view, and denied view
+                  is recorded — that&apos;s the accountability layer your context
+                  calls for. This MVP keeps the log in-browser; shipping Solana
+                  makes it <strong>tamper-evident</strong> and globally
+                  verifiable.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="audit-panel__clear"
+                onClick={() => {
+                  clearAuditLog();
+                  syncAudit();
+                  setStatus("Audit trail cleared for this demo session.");
+                }}
+              >
+                <Trash2 size={16} aria-hidden />
+                Clear demo log
+              </button>
+            </div>
+
+            {auditTrail.length === 0 ? (
+              <p className="audit-empty">
+                No events yet. Save an encrypted record and grant consent — each
+                action will appear here with a timestamp.
+              </p>
+            ) : (
+              <ul className="audit-list">
+                {auditTrail.map((ev) => (
+                  <li key={ev.id} className="audit-item">
+                    <div className="audit-item__top">
+                      <time
+                        className="audit-item__time"
+                        dateTime={new Date(ev.ts).toISOString()}
+                      >
+                        {new Date(ev.ts).toLocaleString()}
+                      </time>
+                      <span
+                        className={`audit-badge audit-badge--${ev.type}`}
+                      >
+                        {formatAuditType(ev.type)}
+                      </span>
+                    </div>
+                    <p className="audit-item__meta">
+                      <span className="audit-item__role">{ev.actorRole}</span>
+                      {ev.walletShort ? (
+                        <>
+                          {" "}
+                          · <span title={ev.walletShort}>{ev.walletShort}</span>
+                        </>
+                      ) : null}{" "}
+                      · record <code className="audit-code">{ev.recordId}</code>
+                    </p>
+                    <p className="audit-item__summary">{ev.summary}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
       </section>
 
       <footer className="site-footer">
         <p>
-          <strong>FemVault</strong> — fertility data stays encrypted off-chain;
-          Solana-ready consent for your hackathon story.
+          <strong>FemVault</strong> — intimate fertility data encrypted
+          off-chain; <strong>Solana</strong> for verifiable consent, access
+          history, and decentralized identity —{" "}
+          <strong>not</strong> for storing medical records on-chain.
         </p>
       </footer>
     </div>
@@ -570,6 +724,26 @@ function App() {
 function short(address: string) {
   if (address.length <= 12) return address;
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
+}
+
+function auditDenialReason(reason: string): string {
+  const map: Record<string, string> = {
+    "no permission found": "no active consent for this wallet / record",
+    "permission revoked": "patient revoked consent",
+    "permission expired": "consent window expired",
+  };
+  return map[reason] ?? reason;
+}
+
+function formatAuditType(t: AuditEvent["type"]): string {
+  const labels: Record<AuditEvent["type"], string> = {
+    record_sealed: "Record sealed",
+    consent_granted: "Consent granted",
+    consent_revoked: "Consent revoked",
+    view_succeeded: "View allowed",
+    view_denied: "View denied",
+  };
+  return labels[t];
 }
 
 function friendlyDenial(reason: string): string {
