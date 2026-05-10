@@ -9,11 +9,13 @@
   },
   "dependencies": {
     "@solana/web3.js": "^1.95.3",
-    "@vitejs/plugin-react": "latest",
+    "buffer": "^6.0.3",
     "lucide-react": "latest",
     "react": "latest",
-    "react-dom": "latest",
-    "react-jsx-runtime": "^1.0.0-alpha.1",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "latest",
     "typescript": "latest",
     "vite": "latest"
   }

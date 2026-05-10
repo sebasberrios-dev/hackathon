@@ -8,6 +8,11 @@ export type SharePayload = {
   v: 1;
   recordId: string;
   secret: string;
+  encryptedPayload: {
+    ciphertext: string;
+    iv: string;
+    salt: string;
+  };
 };
 
 function bytesToBase64Url(bytes: Uint8Array): string {
@@ -15,10 +20,7 @@ function bytesToBase64Url(bytes: Uint8Array): string {
   bytes.forEach((b) => {
     bin += String.fromCharCode(b);
   });
-  return btoa(bin)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function base64UrlToBytes(s: string): Uint8Array {
@@ -41,7 +43,12 @@ export function decodeConsultShareCode(code: string): SharePayload | null {
   try {
     const json = new TextDecoder().decode(base64UrlToBytes(trimmed));
     const p = JSON.parse(json) as SharePayload;
-    if (p.v !== 1 || typeof p.recordId !== "string" || typeof p.secret !== "string") {
+    if (
+      p.v !== 1 ||
+      typeof p.recordId !== "string" ||
+      typeof p.secret !== "string" ||
+      typeof p.encryptedPayload?.ciphertext !== "string"
+    ) {
       return null;
     }
     if (!p.recordId.trim() || !p.secret) return null;
